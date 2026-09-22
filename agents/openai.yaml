@@ -1,0 +1,4 @@
+interface:
+  display_name: "Futu Live Digest Writer｜功能營直播精華生成器"
+  short_description: "把直播字幕轉成標題、金句、深度精華文章與金融合規審核"
+  default_prompt: "Use $futu-live-digest-writer to turn this live-stream transcript into Traditional Chinese titles, guest quotes, an in-depth digest, and a compliance review."
