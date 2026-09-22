@@ -300,14 +300,70 @@ function loadState() {
 }
 
 function transcriptForApi() {
-  const t = state.transcript.trim();
+  let t = state.transcript.trim();
+  if (!t) return '';
+  /* 字幕預處理：清洗 ASR 逐字稿的常見問題，不改變原意 */
+  t = preprocessTranscript(t);
   if (t.length <= MAX_TRANSCRIPT) return t;
   return t.slice(0, MAX_TRANSCRIPT) + '\n\n【注意：字幕過長已被截斷，以下內容未納入本次生成】\n' + t.slice(MAX_TRANSCRIPT, MAX_TRANSCRIPT + 80) + '…';
+}
+
+/* 逐字稿預處理：去口語贅詞、合併斷句、標記疑似識別錯誤，不改變原意 */
+function preprocessTranscript(text) {
+  let lines = text.split('\n');
+  let result = [];
+  let buf = '';
+
+  for (let raw of lines) {
+    let line = raw.trim();
+    if (!line) { flushBuf(); continue; }
+
+    /* 去掉行首重複的口語贅詞 */
+    line = line.replace(/^[\s]*(呃+|嗯+|啊+|哎+|呃，|嗯，|啊，|哦，|噢，)+/g, '');
+    /* 合併結巴：我我我我→我，這這這→這 */
+    line = line.replace(/(.)\1{3,}/g, '$1$1');
+    /* 去掉句中多餘的「對吧」「是不是」「嗯」等口頭禪（保留語意完整的） */
+    line = line.replace(/，對吧[，。]?/g, '。');
+    line = line.replace(/，是不是[，。]/g, '。');
+    /* 偵測疑似 ASR 識別錯誤的段落（大量英文夾雜且無意義） */
+    if (/^[A-Z][a-z]+\s+[A-Z][a-z]+/.test(line) && line.split(' ').length > 4 && !/[\u4e00-\u9fff]/.test(line)) {
+      line = '【疑似語音識別錯誤，原句：' + line + '】';
+    }
+
+    /* 累積成段：如果當前行短，且與上一行語意連貫，合併 */
+    if (buf) {
+      buf = buf + line;
+    } else {
+      buf = line;
+    }
+    /* 句號、問號、感嘆號結尾的行視為完整句，flush */
+    if (/[。！？\?\!]$/.test(buf) && buf.length > 40) {
+      flushBuf();
+    }
+  }
+  flushBuf();
+
+  function flushBuf() {
+    if (buf) {
+      let s = buf.trim();
+      if (s) result.push(s);
+      buf = '';
+    }
+  }
+
+  let out = result.join('\n');
+  /* 標記發言人（如果原始字幕有「嘉賓：」「主持人：」之類）保留 */
+  return out;
 }
 
 function buildSystemPrompt(stagePrompt) {
   return [
     '你是一位資深財經內容編輯，負責把直播字幕加工成可發佈的中文二傳精華帖。輸出語言跟隨用戶輸入的字幕語言：簡體字幕輸出簡體，繁體字幕輸出繁體，不要中英混雜，不要把簡體轉成繁體。',
+    '',
+    '【字幕來源說明】輸入的直播字幕為語音識別（ASR）逐字稿，可能含：重複口語、結巴、無意義贅詞、疑似識別錯誤的段落（已標記【疑似語音識別錯誤】）。處理原則：',
+    '- 合併重複口語，去贅詞，但不改變原意、因果、程度與風險條件。',
+    '- 遇到【疑似語音識別錯誤】的段落，不採用其內容，改從上下文推斷嘉賓實際表達的意思；若無法推斷則列入待確認事項。',
+    '- 專有名詞（如英偉達、戴爾、美聯儲、SpaceX）以上下文語境判斷正確寫法，ASR 識別錯誤的專有名詞可在成稿中修正為正確名稱。',
     '',
     CORE_RULES,
     '',
